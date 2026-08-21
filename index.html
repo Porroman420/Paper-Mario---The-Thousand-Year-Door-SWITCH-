@@ -2285,6 +2285,11 @@ const ALL_STARPIECE_FLAGS = Array.from({length:100}, (_,i)=>'GSWF_STARPIECE_'+St
 const QUEST_GUARANTEED_STARPIECE_FLAGS = ['GSWF_STARPIECE_83', 'GSWF_STARPIECE_84'];
 const GRANTABLE_STARPIECE_FLAGS = ALL_STARPIECE_FLAGS.filter(k => !QUEST_GUARANTEED_STARPIECE_FLAGS.includes(k));
 const ALL_SHINE_FLAGS = Array.from({length:42}, (_,i)=>'GSWF_SHINE_'+String(i).padStart(2,'0'));
+// This Shine Sprite is tied to a quest NPC reward. If pre-set before the quest
+// actually runs, the game crashes. It must NEVER be force-granted by any
+// unlock/NG+ path — only ever preserved if the loaded save earned it for real.
+const QUEST_GUARANTEED_SHINE_FLAGS = ['GSWF_SHINE_35'];
+const GRANTABLE_SHINE_FLAGS = ALL_SHINE_FLAGS.filter(k => !QUEST_GUARANTEED_SHINE_FLAGS.includes(k));
 
 function setCollectionFlags(keys, value=true){
   const gf = SAVE.Switch.m_gf_table;
@@ -2321,8 +2326,12 @@ function compensateShinesForUnlock(save=SAVE, rankOverride=null){
   const spent = partnerShinesSpent(save, rankOverride);
   const current = Number(save.mario && save.mario.powerUpPiece || 0);
   const collected = Math.max(0, Math.min(42, current + spent));
-  const missing = 42 - collected;
-  if(save.mario) save.mario.powerUpPiece = Math.max(0, current + missing);
+  const questCollected = QUEST_GUARANTEED_SHINE_FLAGS.reduce(
+    (n, k) => n + (save.Switch && save.Switch.m_gf_table && save.Switch.m_gf_table[k] === true ? 1 : 0), 0
+  );
+  const eligibleCollected = Math.max(0, collected - questCollected);
+  const missing = Math.max(0, 41 - eligibleCollected);
+  if(save.mario) save.mario.powerUpPiece = Math.max(0, current + missing - questCollected);
   return missing;
 }
 
@@ -2521,8 +2530,8 @@ function renderLogsTab(){
       } }
   ], ALL_STARPIECE_FLAGS, () => { if(document.getElementById('panel-mario')) renderMarioTab(); });
   renderGalleryGrid(document.getElementById('gallerySound'), 'mario.gallery_sound_open', REAL_GALLERY_SOUND_INDICES, [
-    { get: () => collectionFlagsAllTrue(ALL_SHINE_FLAGS), set: value => {
-        setCollectionFlags(ALL_SHINE_FLAGS, value);
+    { get: () => collectionFlagsAllTrue(GRANTABLE_SHINE_FLAGS), set: value => {
+        setCollectionFlags(GRANTABLE_SHINE_FLAGS, value);
         if(value){
           compensateShinesForUnlock(SAVE);
           SAVE.Switch.m_gf_table['SysItem_ITEM_KEY_POWERUP_Collected'] = true;
@@ -2545,7 +2554,7 @@ function renderLogsTab(){
     REAL_GALLERY_ART_INDICES.forEach(i => SAVE.mario.gallery_art_open[i] = true);
     REAL_GALLERY_SOUND_INDICES.forEach(i => SAVE.mario.gallery_sound_open[i] = true);
     setCollectionFlags(GRANTABLE_STARPIECE_FLAGS, true);
-    setCollectionFlags(ALL_SHINE_FLAGS, true);
+    setCollectionFlags(GRANTABLE_SHINE_FLAGS, true);
     gf['SysItem_ITEM_USE_STARPIECE_Collected'] = true;
     gf['SysItem_ITEM_KEY_POWERUP_Collected'] = true;
     normalizeGfMasterOrder(SAVE);
@@ -2904,7 +2913,7 @@ function renderNgPlusTab(){
       });
 
       GRANTABLE_STARPIECE_FLAGS.forEach(k => collectionFlags[k] = true);
-      ALL_SHINE_FLAGS.forEach(k => collectionFlags[k] = true);
+      GRANTABLE_SHINE_FLAGS.forEach(k => collectionFlags[k] = true);
       collectionFlags['SysItem_ITEM_USE_STARPIECE_Collected'] = true;
       collectionFlags['SysItem_ITEM_KEY_POWERUP_Collected'] = true;
 
@@ -2914,7 +2923,7 @@ function renderNgPlusTab(){
       // crashes the chef/waitress event. They are intentionally absent from
       // collectionFlags in both Journal-unlock and normal NG+ generation.
       // Do not re-add them here.
-      ALL_SHINE_FLAGS.forEach(k=>{
+      GRANTABLE_SHINE_FLAGS.forEach(k=>{
         if(Object.prototype.hasOwnProperty.call(gf,k)) collectionFlags[k] = true;
       });
     } else {
@@ -2924,7 +2933,9 @@ function renderNgPlusTab(){
             /^SysItem_ITEM_BADGE_.*_Collected$/.test(k) ||
             /^SysItem_ITEM_USE_.*_Collected$/.test(k) ||
             /^GSWF_(?:STARPIECE|SHINE)_\d+$/.test(k)) &&
-           gf[k]===true && !QUEST_GUARANTEED_STARPIECE_FLAGS.includes(k)) collectionFlags[k] = true;
+           gf[k]===true &&
+           !QUEST_GUARANTEED_STARPIECE_FLAGS.includes(k) &&
+           !QUEST_GUARANTEED_SHINE_FLAGS.includes(k)) collectionFlags[k] = true;
       });
       // These specific SysItem_ITEM_KEY_ flags aren't tied to a re-openable
       // world object the way chest keys are — without POWERUP_Collected the
@@ -2949,8 +2960,16 @@ function renderNgPlusTab(){
     const questStarPiecesCollected = QUEST_GUARANTEED_STARPIECE_FLAGS.reduce(
       (n, k) => n + (SAVE.Switch.m_gf_table && SAVE.Switch.m_gf_table[k] === true ? 1 : 0), 0
     );
+    const questShinesCollected = QUEST_GUARANTEED_SHINE_FLAGS.reduce(
+      (n, k) => n + (SAVE.Switch.m_gf_table && SAVE.Switch.m_gf_table[k] === true ? 1 : 0), 0
+    );
     const normalNgStarPieceTotal = Math.max(0, Math.min(100, Number(curStarPieceNum || 0)));
     const ngStarPieceTotal = Math.max(0, normalNgStarPieceTotal - questStarPiecesCollected);
+    // SHINE_35 is quest-only and must not survive into NG+. Remove it from
+    // the effective Shine total/currency just like the two quest Star Pieces.
+    const currentPowerUpPiece = Number(SAVE.mario && SAVE.mario.powerUpPiece || 0);
+    const normalNgShineTotal = Math.max(0, Math.min(42, currentPowerUpPiece + partnerShinesSpent(SAVE, ngPlusEditCompanions ? ngPlusCompanionRank : null)));
+    const ngShineTotal = Math.max(0, normalNgShineTotal - questShinesCollected);
 
     if(ngPlusUnlockJournal){
       // Unlock All gives every missing *eligible* Star Piece while preserving
@@ -2962,10 +2981,16 @@ function renderNgPlusTab(){
       starPieceNum = ngStarPieceTotal;
       if(SAVE.mario){
         SAVE.mario.starPiece = Math.max(0, currentStarPiece + missingStarPieces);
-        SAVE.mario.powerUpPiece = Math.max(0, 42 - partnerShinesSpent(SAVE, ngPlusEditCompanions ? ngPlusCompanionRank : null));
+        const spentShines = partnerShinesSpent(SAVE, ngPlusEditCompanions ? ngPlusCompanionRank : null);
+        SAVE.mario.powerUpPiece = Math.max(0, ngShineTotal - spentShines);
       }
     } else if(curStarPieceNum !== undefined && curStarPieceNum !== null){
       starPieceNum = ngStarPieceTotal;
+    }
+
+    if(!ngPlusUnlockJournal && SAVE.mario){
+      const spentShines = partnerShinesSpent(SAVE, ngPlusEditCompanions ? ngPlusCompanionRank : null);
+      SAVE.mario.powerUpPiece = Math.max(0, ngShineTotal - spentShines);
     }
 
     // Final NG+ journal sanitation:
@@ -2977,7 +3002,8 @@ function renderNgPlusTab(){
     Object.keys(collectionFlags).forEach(k => {
       if(/^GSWF_ITEM_BADGE_/.test(k) || /^GSWF_COOKED_ITEM_USE_/.test(k) ||
          k === 'GSWF_GOR_02_MONOSIRI_CHECKED' ||
-         QUEST_GUARANTEED_STARPIECE_FLAGS.includes(k)){
+         QUEST_GUARANTEED_STARPIECE_FLAGS.includes(k) ||
+         QUEST_GUARANTEED_SHINE_FLAGS.includes(k)){
         delete collectionFlags[k];
       }
     });
@@ -3073,7 +3099,7 @@ function renderNgPlusTab(){
         REAL_GALLERY_ART_INDICES.forEach(i => SAVE.mario.gallery_art_open[i] = true);
         REAL_GALLERY_SOUND_INDICES.forEach(i => SAVE.mario.gallery_sound_open[i] = true);
         setExistingCollectionFlags(GRANTABLE_STARPIECE_FLAGS, true);
-        setExistingCollectionFlags(ALL_SHINE_FLAGS, true);
+        setExistingCollectionFlags(GRANTABLE_SHINE_FLAGS, true);
       } else {
 
         const currentArt = REAL_GALLERY_ART_INDICES.filter(i => !!SAVE.mario.gallery_art_open[i]);
