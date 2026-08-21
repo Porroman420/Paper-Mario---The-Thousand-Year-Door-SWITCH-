@@ -1705,6 +1705,7 @@ function renderSlotListEditor(containerEl, arrayPath, masterList, opts){
     <div class="menu-toolbar">
       <input type="text" class="addFilter" placeholder="${UI("Search by name…", "Buscar por nombre…")}">
       <select class="addSelect" ${atLimit?'disabled':''}></select>
+      ${opts.category === 'items' || opts.category === 'badges' ? `<input type="number" class="addQty" min="1" max="999" value="1" title="${UI("How many?", "¿Cuántos?")}" aria-label="${UI("How many?", "¿Cuántos?")}" style="width:82px;">` : ``}
       <button class="btn-teal btn-sm addBtn" ${atLimit?'disabled':''}>+ ${UI("Add", "Añadir")}</button>
       ${opts.allowAll ? `<button class="btn-gold btn-sm addAllBtn" ${atLimit?'disabled':''}>✨ ${UI("Add all", "Añadir todo")}</button>` : ``}
       <button class="btn-ghost btn-sm clearBtn">${UI("Clear all", "Limpiar todo")}</button>
@@ -1762,19 +1763,37 @@ function renderSlotListEditor(containerEl, arrayPath, masterList, opts){
   containerEl.querySelector('.addBtn').addEventListener('click', ()=>{
     const val = select.value;
     if(!val){ showToast(UI('Nothing selected to add.', 'No hay nada seleccionado para añadir.'), true); return; }
-    if(softLimit !== null){
-      const used = arr.filter(v=>v!==nullVal).length;
-      if(used >= softLimit){
-        showToast(UI(`Pocket full (${used}/${softLimit}). Without the Strange Sack the limit is lower — see the note above.`, `Bolsillo lleno (${used}/${softLimit}). Sin la Strange Sack el límite es menor — ver la nota de arriba.`), true);
-        return;
+
+    const qtyEl = containerEl.querySelector('.addQty');
+    let requested = qtyEl ? Math.floor(Number(qtyEl.value)) : 1;
+    if(!Number.isFinite(requested) || requested < 1) requested = 1;
+    requested = Math.min(requested, 999);
+
+    let added = 0;
+    for(let n=0; n<requested; n++){
+      if(softLimit !== null){
+        const used = arr.filter(v=>v!==nullVal).length;
+        if(used >= softLimit) break;
       }
+      const freeSlot = arr.indexOf(nullVal);
+      if(freeSlot === -1) break;
+      arr[freeSlot] = val;
+      added++;
+      if(opts.onAdd) opts.onAdd(val);
     }
-    const freeSlot = arr.indexOf(nullVal);
-    if(freeSlot === -1){ showToast(UI('No free slots left in this inventory.', 'No quedan espacios libres en este inventario.'), true); return; }
-    arr[freeSlot] = val;
-    if(opts.onAdd) opts.onAdd(val);
+
+    if(added === 0){
+      if(softLimit !== null){
+        const used = arr.filter(v=>v!==nullVal).length;
+        showToast(UI(`Pocket full (${used}/${softLimit}). Without the Strange Sack the limit is lower — see the note above.`, `Bolsillo lleno (${used}/${softLimit}). Sin la Strange Sack el límite es menor — ver la nota de arriba.`), true);
+      } else {
+        showToast(UI('No free slots left in this inventory.', 'No quedan espacios libres en este inventario.'), true);
+      }
+      return;
+    }
+
     renderSlotListEditor(containerEl, arrayPath, masterList, opts);
-    showToast(UI('Added: ', 'Añadido: ') + nameOf(val) + ' ✓');
+    showToast(UI(`Added ${added}× ${nameOf(val)} ✓`, `Añadido ${added}× ${nameOf(val)} ✓`));
     if(opts.afterChange) opts.afterChange();
   });
   const clearBtn = containerEl.querySelector('.clearBtn');
@@ -1815,6 +1834,18 @@ function trimHaveItemsToLimit(limit){
   if(owned.length <= limit) return;
   owned.sort((a,b)=> a.name.localeCompare(b.name));
   owned.slice(limit).forEach(o=> arr[o.i] = 'ITEM_NULL');
+}
+
+// Gear-only refresh preserving the active search/selection and scroll state.
+function refreshGearTabPreservingEditorState(){
+  if(!SAVE) return;
+  const state={subtabHidden:!!document.getElementById('keyItemEditorHidden') && document.getElementById('keyItemEditorHidden').style.display!=='none',pageY:window.scrollY,editors:{}};
+  ['keyItemEditorVisible','keyItemEditorHiddenList','haveItemEditor','keepItemEditor'].forEach(id=>{const c=document.getElementById(id); if(!c)return; const f=c.querySelector('.addFilter'),sel=c.querySelector('.addSelect'),panel=c.querySelector('.menu-panel'); state.editors[id]={search:f?f.value:'',selected:sel?sel.value:'',panelTop:panel?panel.scrollTop:0,panelLeft:panel?panel.scrollLeft:0};});
+  renderGearTab();
+  const hb=document.getElementById('keyItemsSubtabHidden'),vb=document.getElementById('keyItemsSubtabVisible'),hp=document.getElementById('keyItemEditorHidden'),vp=document.getElementById('keyItemEditorVisible');
+  if(state.subtabHidden&&hb&&vb&&hp&&vp){hb.classList.add('active');vb.classList.remove('active');hp.style.display='';vp.style.display='none';}
+  Object.entries(state.editors).forEach(([id,v])=>{const c=document.getElementById(id);if(!c)return;const f=c.querySelector('.addFilter'),sel=c.querySelector('.addSelect'),panel=c.querySelector('.menu-panel');if(f){f.value=v.search;f.dispatchEvent(new Event('input',{bubbles:true}));}if(sel&&v.selected&&Array.from(sel.options).some(o=>o.value===v.selected))sel.value=v.selected;if(panel){panel.scrollTop=v.panelTop;panel.scrollLeft=v.panelLeft;}});
+  window.scrollTo(0,state.pageY);
 }
 
 function renderGearTab(){
@@ -1876,9 +1907,9 @@ function renderGearTab(){
       return true;
     }
   });
-  renderSlotListEditor(document.getElementById('keyItemEditorHiddenList'), 'mario.key_item_str', MASTER.keyitems, {allowAll:true, category:'keyitems', idFilter:isHidden, afterChange:renderGearTab});
-  renderSlotListEditor(document.getElementById('haveItemEditor'), 'mario.have_item_str', MASTER.items, {allowAll:true, category:'items', softLimit:itemPocketLimit()});
-  renderSlotListEditor(document.getElementById('keepItemEditor'), 'mario.keep_item_str', MASTER.items, {allowAll:true, category:'items', softLimit:32});
+  renderSlotListEditor(document.getElementById('keyItemEditorHiddenList'), 'mario.key_item_str', MASTER.keyitems, {allowAll:true, category:'keyitems', idFilter:isHidden, afterChange:refreshGearTabPreservingEditorState});
+  renderSlotListEditor(document.getElementById('haveItemEditor'), 'mario.have_item_str', MASTER.items, {allowAll:true, category:'items', softLimit:itemPocketLimit(), afterChange:refreshGearTabPreservingEditorState});
+  renderSlotListEditor(document.getElementById('keepItemEditor'), 'mario.keep_item_str', MASTER.items, {allowAll:true, category:'items', softLimit:32, afterChange:refreshGearTabPreservingEditorState});
 
   const chkNoSackMod = document.getElementById('chkNoSackMod');
   if(chkNoSackMod) chkNoSackMod.addEventListener('change', ()=>{
@@ -2028,6 +2059,19 @@ function installGlobalLiveRefresh(){
     const el = e.target instanceof Element ? e.target : null;
     if(!el || el.closest('#rawText')) return;
     if(el instanceof HTMLInputElement && el.type === 'range') return;
+
+    // Gear item dropdowns are selection controls, not SAVE mutations.
+    // Do NOT rebuild the editor when the user changes the selected item;
+    // the actual mutation happens only when Add / Remove / Clear / Add all
+    // is clicked. Re-rendering here destroys the user's current selection.
+    if(el instanceof HTMLSelectElement && el.classList.contains('addSelect') && el.closest('#panel-gear')) return;
+
+    // Gear "How many?" is also a staging control, not a SAVE mutation.
+    // Its value (including the browser spinner arrows) must be freely editable
+    // without triggering the global live refresh. The actual SAVE mutation
+    // happens only when Add is clicked.
+    if(el instanceof HTMLInputElement && el.classList.contains('addQty') && el.closest('#panel-gear')) return;
+
     syncLiveViews();
   });
 
@@ -2044,6 +2088,12 @@ function installGlobalLiveRefresh(){
        btn.id === 'btnLoadAnother' || btn.id === 'btnThemeToggle' ||
        btn.id === 'btnLangToggle' || btn.id === 'btnDownload' ||
        btn.id === 'btnDownloadZip') return;
+
+    // Gear Add/Remove/Clear/Add-all already refresh Gear themselves. Avoid a
+    // second document-level renderAll(), which destroys the current selection.
+    if(btn.closest('#panel-gear') &&
+       (btn.classList.contains('addBtn') || btn.classList.contains('addAllBtn') ||
+        btn.classList.contains('clearBtn') || btn.classList.contains('rm'))) return;
 
     syncLiveViews();
   });
